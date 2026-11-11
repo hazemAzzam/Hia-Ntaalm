@@ -114,3 +114,31 @@ Games:
       + UI and Sound effects.
       + The Idea of each scene
       + Assets and Useful Resources such as background and Audio
+
+## Building & playing (no Unity install needed)
+
+The game is built in GitHub Actions with [GameCI](https://game-ci.com) — see `.github/workflows/build.yml`.
+The Unity project itself is in `هيا نتعلم/` (Unity **2020.3.21f1**).
+
+| Trigger | What happens |
+|---|---|
+| Push to `main` / manual run (Actions → *Build & Release* → Run workflow) | Builds WebGL + macOS, deploys WebGL to GitHub Pages |
+| Push a tag `v*` (e.g. `git tag v1.0.0 && git push origin v1.0.0`) | Same, plus a GitHub Release with `HiaNtaalm-WebGL.zip` and `HiaNtaalm-macOS.zip` |
+
+**Play in the browser:** `https://<owner>.github.io/Hia-Ntaalm/` (desktop browsers; Unity 2020 WebGL is not supported on mobile).
+Sound starts after the first click — browsers block autoplay.
+
+**Mac app:** unzip, then run `xattr -cr HiaNtaalm.app` once (the app is unsigned), or right-click → Open. On Apple Silicon it runs through Rosetta 2.
+
+### One-time setup
+
+1. **Repo secrets** (Settings → Secrets and variables → Actions) — Unity needs an activated license even in CI:
+   - `UNITY_EMAIL`, `UNITY_PASSWORD` — your Unity account.
+   - `UNITY_LICENSE` — full contents of the license file. Unity no longer issues Personal licenses through its website, so get it by installing **Unity Hub only** (no editor), signing in, and activating a Personal license (Preferences → Licenses → Add). The file is then at `/Library/Application Support/Unity/Unity_lic.ulf` (macOS) or `C:\ProgramData\Unity\Unity_lic.ulf` (Windows).
+2. **GitHub Pages** → Settings → Pages → Source: **GitHub Actions**.
+
+### Why these choices
+
+- **WebGL compression is disabled** (`webGLCompressionFormat: 2` in `ProjectSettings.asset`). Unity's default Brotli output needs `Content-Encoding` headers that GitHub Pages can't set, so a compressed build would fail to load there.
+- **The project is copied to `game/` in CI**: the folder name contains Arabic characters and a space, which GameCI's Docker scripts don't handle reliably.
+- **Builds are zipped inside the build job**: `upload-artifact` drops file permissions, which would break the `.app` executable.

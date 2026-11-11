@@ -1,0 +1,126 @@
+# Builds the Unity project (Unity 2020.3.21f1) in GitHub Actions via GameCI —
+# no local Unity install needed. See "Building & playing" in README.md.
+#
+#   push to main      -> build WebGL + macOS, deploy WebGL to GitHub Pages
+#   push tag v*       -> same, plus a GitHub Release with both builds zipped
+#   manual run        -> build + Pages deploy (Actions tab -> Run workflow)
+#
+# Required repo secrets (Unity Personal license):
+#   UNITY_LICENSE   contents of Unity_lic.ulf
+#   UNITY_EMAIL     Unity account email
+#   UNITY_PASSWORD  Unity account password
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The Unity project lives in "هيا نتعلم/" (Arabic + space). We copy it to an
+  # ASCII path in CI because GameCI's docker scripts don't handle that path well.
+  PROJECT_DIR: game
+  BUILD_NAME: HiaNtaalm
+
+jobs:
+  build:
+    name: Build ${{ matrix.targetPlatform }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        targetPlatform: [WebGL, StandaloneOSX]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Unity docker images are large; the default runner disk is tight.
+      - uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: false
+
+      - name: Copy project to ASCII path
+        run: cp -R "هيا نتعلم" "$PROJECT_DIR"
+
+      # Library/ is Unity's import cache; restoring it skips most of the
+      # (slow) asset import on later runs.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PROJECT_DIR }}/Library
+          key: Library-${{ matrix.targetPlatform }}-${{ hashFiles('هيا نتعلم/Assets/**', 'هيا نتعلم/Packages/**', 'هيا نتعلم/ProjectSettings/**') }}
+          restore-keys: Library-${{ matrix.targetPlatform }}-
+
+      - uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: ${{ env.PROJECT_DIR }}
+          unityVersion: 2020.3.21f1
+          targetPlatform: ${{ matrix.targetPlatform }}
+          buildName: ${{ env.BUILD_NAME }}
+
+      # Zip here (not after upload-artifact) so the .app keeps its executable
+      # bits and symlinks — artifacts strip file permissions.
+      - name: Zip build
+        run: |
+          cd "build/${{ matrix.targetPlatform }}"
+          if [ "${{ matrix.targetPlatform }}" = "StandaloneOSX" ]; then
+            zip -qry "$GITHUB_WORKSPACE/$BUILD_NAME-macOS.zip" "$BUILD_NAME.app"
+          else
+            zip -qr "$GITHUB_WORKSPACE/$BUILD_NAME-WebGL.zip" "$BUILD_NAME"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.targetPlatform }}
+          path: ${{ env.BUILD_NAME }}-*.zip
+
+      - name: Upload Pages artifact
+        if: matrix.targetPlatform == 'WebGL'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/WebGL/${{ env.BUILD_NAME }}
+
+  deploy-pages:
+    name: Deploy WebGL to GitHub Pages
+    needs: build
+    # Deploy even if only the macOS build failed (the WebGL artifact is what matters here).
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: build-*
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.BUILD_NAME }}-*.zip
+          generate_release_notes: true
+          body: |
+            **Play in the browser:** https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+
+            - `HiaNtaalm-WebGL.zip` — browser build; serve the folder over HTTP (e.g. `python3 -m http.server`), don't open index.html directly.
+            - `HiaNtaalm-macOS.zip` — unsigned Mac app (runs via Rosetta on Apple Silicon). After unzipping run `xattr -cr HiaNtaalm.app` once, or right-click → Open.
